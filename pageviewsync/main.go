@@ -56,43 +56,27 @@ func main (){
 	users := strings.Split(*usersString, ",")
 
 	// send a goroutine off to load users into the queue
-	rtnStart := make(chan bool, *maxWorkers - 1)
-	rtnFinish := make(chan bool, *maxWorkers - 1)
+	var wg sync.WaitGroup
 	
 	// just before we kick off a new goroutine, queue a bool in liveGrp
-	rtnStart <- true
-	go func(rtnFinish chan bool) {
+	wg.Add(1)
+	go func(wg *sync.WaitGroup) {
 		workGrp := make(chan bool, *maxWorkers)
 		for _, u := range users {
 			// This will block if we've got too many workers going already.
 			workGrp <- true
 
-			rtnStart <- true
-			go worker.UpdateUserPageviews(u, workGrp, rtnFinish)
+			wg.Add(1)
+			go worker.UpdateUserPageviews(u, workGrp, wg)
 		}
 
 		close(workGrp)
 
 		// when we're done with this routine, read a bool from liveGrp
-		rtnFinish <- true
-	}(rtnFinish)
+		wg.Done()
+	}(&wg)
 
 	// Here is where we wait for all of the goroutines to have finished.
-	// When finishCount == startCount, we are done.
-	// I'm really hoping that there isn't a race condition lurking here.
-	var startCount, finishCount uint64 = 0, 0
-	for {
-		select {
-		case <- rtnStart:
-			startCount += 1
-		case <- rtnFinish:
-			finishCount += 1
-		}
-
-		if finishCount == startCount {
-			break
-		}
-	}
-
+		wg.Wait()
 	fmt.Println("Program complete.")
 }

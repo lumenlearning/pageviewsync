@@ -23,16 +23,17 @@ package worker
 import (
 	"fmt"
 	"time"
+	"sync"
 )
 
-func UpdateUserPageviews(userID string, workerBuffer, rtnFinish chan bool) error {
+func UpdateUserPageviews(userID string, workerBuffer chan bool, wg *sync.WaitGroup) error {
 	// go do the update stuff
 	fmt.Println("Fetching user: "+userID)
-	time.Sleep(time.Second * 2)
+	time.Sleep(time.Second * 1)
 	
 	// Indicate that we're done and free up space for another worker.
 	<- workerBuffer
-	rtnFinish <- true
+	wg.Done()
 
 	return nil
 }
