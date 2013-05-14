@@ -20,14 +20,55 @@ along with pageviewsync.  If not, see <http://www.gnu.org/licenses/>.
 
 package canvas
 
-import "io/ioutil"
+import (
+	"errors"
+	"io/ioutil"
+	"time"
+)
 
-func ReadFile(path string) (*string, error) {
+var ISO8601TimeFmt string = "2006-01-02T15:04:05-07:00"
+var UnixTimeFmt string = "2006-01-02 15:04:05"
+
+func ReadFile(path string) (string, error) {
 	b, err := ioutil.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	
 	str := string(b)
-	return &str, nil
-} 
+	return str, nil
+}
+
+func TimeFromISO8601 (dateTime string) (time.Time, error) {
+	t, err := time.Parse(ISO8601TimeFmt, dateTime)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return t, nil
+}
+
+func TimeFromUnix (dateTime string) (time.Time, error) {
+	t, err := time.Parse(UnixTimeFmt, dateTime)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return t, nil
+}
+
+func UnixFromTime (t time.Time) (string, error) {
+	u := t.Format(UnixTimeFmt)
+	if u == "" {
+		return "", errors.New("Unable to format as:"+UnixTimeFmt)
+	}
+	return u, nil
+}
+
+func ISO8601FromTime (t time.Time) (string, error) {
+	i := t.Format(ISO8601TimeFmt)
+	if i == "" {
+		return "", errors.New("Unable to format as:"+UnixTimeFmt)
+	}
+	return i, nil
+}

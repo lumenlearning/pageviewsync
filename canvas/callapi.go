@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -37,14 +39,18 @@ type TimeData struct {
 }
 
 func CallAPI(srv, api, auth string, cln *http.Client) (*http.Response, *TimeData, error) {
+	// Put together the full URL for the request
+	url := "https://"+srv+"/api/v1/"+api
+
+	return AuthorizedCall(url, auth, cln)
+}
+
+func AuthorizedCall(url, auth string, cln *http.Client) (*http.Response, *TimeData, error) {
 	// Get an http.Client if one was not provided
 	if cln == nil {
 		cln = new(http.Client)
 	}
 
-	// Put together the full URL for the request
-	url := "https://"+srv+"/api/v1/"+api
-	
 	// Get an http.Request object ready to go, and add
 	//   the Authorization header to it.
 	req, err := http.NewRequest("GET", url, nil)
@@ -101,9 +107,9 @@ func ReadResponse(resp *http.Response) (*[]byte, *TimeData, error) {
 	return &body, times, nil
 }
 
-func GetObjFromJSON(data []byte) (*interface{}, error) {
+func GetObjFromJSON(data *[]byte) (*interface{}, error) {
 	var obj interface{}
-	err := json.Unmarshal(data, &obj)
+	err := json.Unmarshal(*data, &obj)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +117,7 @@ func GetObjFromJSON(data []byte) (*interface{}, error) {
 	return &obj, nil
 }
 
-func GetCSVFromJSON(data []byte) (string, error) {
+func GetCSVFromJSON(data *[]byte) (string, error) {
 	// Convert from JSON into primitives
 	obj, err := GetObjFromJSON(data)
 	if err != nil {
@@ -128,4 +134,32 @@ func GetCSVFromJSON(data []byte) (string, error) {
 	}
 	
 	return "", nil
+}
+
+func GetNextLink(resp *http.Response) (string, error) {
+	linkStr := resp.Header.Get("Link")
+	if linkStr == "" {
+		return "", nil
+	}
+
+	allLinks := strings.Split(linkStr, ",")
+
+	var link string
+
+	for _, lv := range allLinks {
+		pieces := strings.Split(lv, ";")
+
+		// Build the regexp and Check the rel tag
+		relNext, err := regexp.Compile("rel=[\"']next[\"']")
+		if err != nil {
+			return "", err
+		}
+
+		if relNext.FindStringIndex(pieces[1]) != nil {
+			link = strings.Trim(pieces[0], "<>")
+			break
+		}
+	}
+
+	return link, nil
 }
