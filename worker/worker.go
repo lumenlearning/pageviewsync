@@ -144,30 +144,40 @@ func (w *Worker) RunPageviewUpdate() error {
 		}
 	}
 	
-	//// send the results to the local database ////
-	// make the connection
-	con, err := sql.Open("mysql", w.DBInfo.User+":"+w.DBInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+w.DBInfo.Schema)
-	defer con.Close()
+	insertCount, errorFunc, err := UpdateDB(&w.DBInfo, &pvs)
 	if err != nil {
 		w.Done()
-		w.Log("Terminating. sql.Open says: %v", err.Error())
+		w.Log("Terminated. UpdateDB/%v says: %v", errorFunc, err.Error())
 		return err
+	}
+
+	// If we got to this point, no errors!
+	w.Done()
+	w.Log("Updated with %v rows.", insertCount)
+	return nil
+}
+
+func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, error) {
+	//// send the results to the local database ////
+	// make the connection
+	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
+	defer con.Close()
+	if err != nil {
+		return 0, "sql.Open", err
 	}
 	
 	// start a transaction
 	tx, err := con.Begin()
 	if err != nil {
-		w.Done()
-		w.Log("Terminating. con.Begin says: %v", err.Error())
-		return err
+		return 0, "sql.Begin", err
 	}
 	
 	// Keep track of total pageview records updated
 	var insertCount int64
 	
 	// convert each canvas.Pageview to an insert statement
-	for _, pv := range pvs {
-		ins := "INSERT INTO "+w.DBInfo.Table+" ("
+	for _, pv := range *pvs {
+		ins := "INSERT INTO "+dbInfo.Table+" ("
 		val := " VALUES ("
 		i := 0
 		for k, v := range pv {
@@ -190,9 +200,7 @@ func (w *Worker) RunPageviewUpdate() error {
 			if k == "created_at" {
 				insI, valI, err := GetDateTimeValue("created_at_datetime", strVal, i)
 				if err != nil {
-					w.Done()
-					w.Log("Terminating. GetDateTimeValue says: %v", err.Error())
-					return err
+					return 0, "GetDateTimeValue", err
 				}
 				ins = ins + insI
 				val = val + valI
@@ -201,9 +209,7 @@ func (w *Worker) RunPageviewUpdate() error {
 			if k == "updated_at" {
 				insI, valI, err := GetDateTimeValue("updated_at_datetime", strVal, i)
 				if err != nil {
-					w.Done()
-					w.Log("Terminating. GetDateTimeValue says: %v", err.Error())
-					return err
+					return 0, "GetDateTimeValue", err
 				}
 				ins = ins + insI
 				val = val + valI
@@ -218,38 +224,28 @@ func (w *Worker) RunPageviewUpdate() error {
 		
 		// add each insert to the transaction
 		qu := ins + " " + val
-		w.Log("Query: %v", qu)
 		res, err := tx.Exec(qu)
 		if err != nil {
 			err1 := err
 			err := tx.Rollback()
-			w.Done()
-			w.Log("Terminating. tx.Exec says: %v", err.Error())
-			return errors.New(err1.Error()+"\n"+err.Error())
+			return 0, "tx.Exec", errors.New(err1.Error()+"\n"+err.Error())
 		}
 
 		// Record number of rows inserted
 		rowsAffected, err := res.(sql.Result).RowsAffected()
 		if err != nil {
-			w.Done()
-			w.Log("Terminating. res.RowsAffected says: %v", err.Error())
-			return err
+			return 0, "res.RowsAffected", err
 		}
 		insertCount += rowsAffected
 	}
-
+	
 	// commit the transaction
 	err = tx.Commit()
 	if err != nil {
-		w.Done()
-		w.Log("Terminating. tx.Commit says: %v", err.Error())
-		return err
+		return 0, "tx.Commit", err
 	}
 
-	// If we got to this point, no errors!
-	w.Done()
-	w.Log("Updated with %v rows.", insertCount)
-	return nil
+	return insertCount, "", nil
 }
 
 func GetDateTimeValue(k, strVal string, i int) (string, string, error) {
