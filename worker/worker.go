@@ -80,7 +80,7 @@ func (w *Worker) RunPageviewUpdate() error {
 	if err != nil {
 		w.Done()
 		w.Log("Terminating. GetUpdateReqs says: %v", err.Error())
-		return err
+		return errors.New("worker.GetUpdateReqs => " + err.Error())
 	}
 	var fullUpdate bool = (lastTimestamp == "" || lastRequestID == "")
 
@@ -88,7 +88,6 @@ func (w *Worker) RunPageviewUpdate() error {
 	
 	// Get the information needed to update the local DB
 	url := "https://"+w.APIInfo.Host+"/api/v1/users/"+w.UserID+"/page_views?per_page=1000"
-	w.Log("First URL is %v", url)
 
 	// Go get as many pages as we need
 	var pvs []canvas.Pageview
@@ -99,11 +98,10 @@ func (w *Worker) RunPageviewUpdate() error {
 		if err != nil {
 			w.Done()
 			w.Log("Terminating. ParsePage says: %v", err.Error())
-			return err
+			return errors.New("worker.ParsePage => " + err.Error())
 		}
 
 		// Update url to be the next link
-		w.Log("Next page: %v", nextLink)
 		url = nextLink
 		
 		if !fullUpdate {
@@ -111,19 +109,18 @@ func (w *Worker) RunPageviewUpdate() error {
 			for _, r := range results {
 				ts, _ := r["created_at"]
 				id, _ := r["request_id"]
-				w.Log("Pageview at %v (%v)", ts, id)
 
 				tISO, err := canvas.TimeFromISO8601(ts.(string))
 				if err != nil {
 					w.Done()
 					w.Log("Terminated. TimeFromISO8601 says: %v", err)
-					return err
+					return errors.New("canvas.TimeFromISO8601 => " + err.Error())
 				}
 				tUnix, err := canvas.UnixFromTime(tISO)
 				if err != nil {
 					w.Done()
-					w.Log("Termianted. UnixFromTime says: %v", err)
-					return err
+					w.Log("Terminated. UnixFromTime says: %v", err)
+					return errors.New("canvas.UnixFromTime => " + err.Error())
 				}
 				
 				if id.(string) == lastRequestID || tUnix < lastTimestamp {
@@ -144,11 +141,11 @@ func (w *Worker) RunPageviewUpdate() error {
 		}
 	}
 	
-	insertCount, errorFunc, err := UpdateDB(&w.DBInfo, &pvs)
+	insertCount, err := UpdateDB(&w.DBInfo, &pvs)
 	if err != nil {
 		w.Done()
-		w.Log("Terminated. UpdateDB/%v says: %v", errorFunc, err.Error())
-		return err
+		w.Log("Terminated. UpdateDB says: %v", err.Error())
+		return errors.New("worker.UpdateDB => " + err.Error())
 	}
 
 	// If we got to this point, no errors!
@@ -157,19 +154,19 @@ func (w *Worker) RunPageviewUpdate() error {
 	return nil
 }
 
-func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, error) {
+func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
 	//// send the results to the local database ////
 	// make the connection
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
 	defer con.Close()
 	if err != nil {
-		return 0, "sql.Open", err
+		return 0, errors.New("sql.Open => " + err.Error())
 	}
 	
 	// start a transaction
 	tx, err := con.Begin()
 	if err != nil {
-		return 0, "sql.Begin", err
+		return 0, errors.New("con.Begin => " + err.Error())
 	}
 	
 	// Keep track of total pageview records updated
@@ -200,7 +197,7 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, err
 			if k == "created_at" {
 				insI, valI, err := GetDateTimeValue("created_at_datetime", strVal, i)
 				if err != nil {
-					return 0, "GetDateTimeValue", err
+					return 0, errors.New("worker.GetDateTimeValue => " + err.Error())
 				}
 				ins = ins + insI
 				val = val + valI
@@ -209,7 +206,7 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, err
 			if k == "updated_at" {
 				insI, valI, err := GetDateTimeValue("updated_at_datetime", strVal, i)
 				if err != nil {
-					return 0, "GetDateTimeValue", err
+					return 0, errors.New("worker.GetDateTimeValue => " + err.Error())
 				}
 				ins = ins + insI
 				val = val + valI
@@ -228,13 +225,13 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, err
 		if err != nil {
 			err1 := err
 			err := tx.Rollback()
-			return 0, "tx.Exec", errors.New(err1.Error()+"\n"+err.Error())
+			return 0, errors.New("tx.Exec => "+err1.Error()+"\n"+err.Error())
 		}
 
 		// Record number of rows inserted
 		rowsAffected, err := res.(sql.Result).RowsAffected()
 		if err != nil {
-			return 0, "res.RowsAffected", err
+			return 0, errors.New("res.RowsAffected => " + err.Error())
 		}
 		insertCount += rowsAffected
 	}
@@ -242,21 +239,21 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, string, err
 	// commit the transaction
 	err = tx.Commit()
 	if err != nil {
-		return 0, "tx.Commit", err
+		return 0, errors.New("tx.Commit => " + err.Error())
 	}
 
-	return insertCount, "", nil
+	return insertCount, nil
 }
 
 func GetDateTimeValue(k, strVal string, i int) (string, string, error) {
 	t, err := canvas.TimeFromISO8601(strVal)
 	if err != nil {
-		return "", "", err
+		return "", "", errors.New("canvas.TimeFromISO8601 => " + err.Error())
 	}
 	
 	tu, err := canvas.UnixFromTime(t)
 	if err != nil {
-		return "", "", err
+		return "", "", errors.New("canvas.UnixFromTime => " + err.Error())
 	}
 	
 	insI, valI := BuildInsertAndValues(k, tu, i)
@@ -292,19 +289,19 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 	// Call the API and get the response
 	resp, body, err := GetResponse(url, apiInfo)
 	if err != nil {
-		return "", nil, err
+		return "", nil, errors.New("worker.GetResponse" + err.Error())
 	}
 
 	// Get the Link header, check for rel="next"
 	nextLink, err := canvas.GetNextLink(resp)
 	if err != nil {
-		return "", nil, err
+		return "", nil, errors.New("canvas.GetNextLink => " + err.Error())
 	}
 
 	// Get a map representation of the data returned
 	obj, err := canvas.GetObjFromJSON(body)
 	if err != nil {
-		return "", nil, err
+		return "", nil, errors.New("canvas.GetObjFromJSON => " + err.Error())
 	}
 
 	var results []interface{}
@@ -313,7 +310,7 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 	case []interface{}:
 		results = (*obj).([]interface{})
 	default:
-		return "", nil, errors.New(fmt.Sprint("Expecting an array (received ", vt, ")"))
+		return "", nil, errors.New(fmt.Sprintf("Expecting an array, received %v", vt))
 	}
 
 	var pvs []canvas.Pageview
@@ -324,9 +321,6 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 			pageviewResult := v.(map[string]interface{})
 			var pv canvas.Pageview = make(canvas.Pageview)
 			for k, v := range pageviewResult {
-				if k == "created_at" {
-					
-				}
 				pv[k] = v
 			}
 			pvs = append(pvs, pv)
@@ -339,12 +333,12 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 func GetResponse(url string, apiInfo APIConnectInfo) (*http.Response, *[]byte, error) {
 	resp, _, err := canvas.AuthorizedCall(url, apiInfo.Auth, apiInfo.Client)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.New("canvas.AuthorizedCall => " + err.Error())
 	}
 
 	body, _, err := canvas.ReadResponse(resp)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, errors.New("canvas.ReadResponse => " + err.Error())
 	}
 
 	return resp, body, nil
@@ -355,7 +349,7 @@ func GetUpdateReqs(userID string, dbInfo DBConnectInfo) (string, string, error) 
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
 	defer con.Close()
 	if err != nil {
-		return "", "", err
+		return "", "", errors.New("sql.Open => " + err.Error())
 	}
 
 	// Build the query
@@ -372,7 +366,7 @@ func GetUpdateReqs(userID string, dbInfo DBConnectInfo) (string, string, error) 
 			request_id = ""
 			created_at = ""
 		} else {
-			return "", "", err
+			return "", "", errors.New("row.Scan => " + err.Error())
 		}
 	}
 
