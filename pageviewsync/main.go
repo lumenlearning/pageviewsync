@@ -23,8 +23,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"lumenlearning.com/pageviews/canvas"
-	"lumenlearning.com/pageviews/worker"
+	lmnIo "lumenlearning.com/util/io"
+	"lumenlearning.com/pageviewsync/worker"
 	"net/http"
 	"os"
 	"runtime"
@@ -64,7 +64,7 @@ func main() {
 	}
 
 	// Read in the authorization token
-	auth, err := canvas.ReadFile(*authFilePath)
+	auth, err := lmnIo.ReadFile(*authFilePath)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -73,7 +73,7 @@ func main() {
 	}
 
 	// Read in the user IDs file
-	usersString, err := canvas.ReadFile(*userIDFilePath)
+	usersString, err := lmnIo.ReadFile(*userIDFilePath)
 	if err != nil {
 		panic(err.Error())
 	}

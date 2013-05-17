@@ -25,7 +25,8 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	"lumenlearning.com/pageviews/canvas"
+	lmnCanvas "lumenlearning.com/util/canvas"
+	lmnTime "lumenlearning.com/util/time"
 	"net/http"
 	"sync"
 )
@@ -79,7 +80,7 @@ func (w *Worker) RunPageviewUpdate() error {
 	lastRequestID, lastTimestamp, err := GetUpdateReqs(w.UserID, w.DBInfo)
 	if err != nil {
 		w.Done()
-		w.Log("Terminating. GetUpdateReqs says: %v", err.Error())
+		w.Log("Terminating. worker.GetUpdateReqs => %v", err.Error())
 		return errors.New("worker.GetUpdateReqs => " + err.Error())
 	}
 	var fullUpdate bool = (lastTimestamp == "" || lastRequestID == "")
@@ -90,14 +91,14 @@ func (w *Worker) RunPageviewUpdate() error {
 	url := "https://"+w.APIInfo.Host+"/api/v1/users/"+w.UserID+"/page_views?per_page=1000"
 
 	// Go get as many pages as we need
-	var pvs []canvas.Pageview
+	var pvs []lmnCanvas.Pageview
 	keepGoing := true
 	for keepGoing {
 		w.Log("Fetching %v", url)
 		nextLink, results, err := ParsePage(url, w.APIInfo)
 		if err != nil {
 			w.Done()
-			w.Log("Terminating. ParsePage says: %v", err.Error())
+			w.Log("Terminating. worker.ParsePage => %v", err.Error())
 			return errors.New("worker.ParsePage => " + err.Error())
 		}
 
@@ -110,17 +111,17 @@ func (w *Worker) RunPageviewUpdate() error {
 				ts, _ := r["created_at"]
 				id, _ := r["request_id"]
 
-				tISO, err := canvas.TimeFromISO8601(ts.(string))
+				tISO, err := lmnTime.TimeFromISO8601(ts.(string))
 				if err != nil {
 					w.Done()
-					w.Log("Terminated. TimeFromISO8601 says: %v", err)
-					return errors.New("canvas.TimeFromISO8601 => " + err.Error())
+					w.Log("Terminated. lmnTime.TimeFromISO8601 => %v", err)
+					return errors.New("lmnTime.TimeFromISO8601 => " + err.Error())
 				}
-				tUnix, err := canvas.UnixFromTime(tISO)
+				tUnix, err := lmnTime.UnixFromTime(tISO)
 				if err != nil {
 					w.Done()
-					w.Log("Terminated. UnixFromTime says: %v", err)
-					return errors.New("canvas.UnixFromTime => " + err.Error())
+					w.Log("Terminated. lmnTime.UnixFromTime => %v", err)
+					return errors.New("lmnTime.UnixFromTime => " + err.Error())
 				}
 				
 				if id.(string) == lastRequestID || tUnix < lastTimestamp {
@@ -134,6 +135,13 @@ func (w *Worker) RunPageviewUpdate() error {
 			// Add everything from this page
 			pvs = append(pvs, results...)
 		}
+		for _, r := range results {
+			ts, _ := r["created_at"]
+			id, _ := r["request_id"]
+			w.Log("%v\t%v", id, ts)
+		}
+
+
 		// Is there anything left to grab?
 		if nextLink == "" {
 			keepGoing = false
@@ -144,7 +152,7 @@ func (w *Worker) RunPageviewUpdate() error {
 	insertCount, err := UpdateDB(&w.DBInfo, &pvs)
 	if err != nil {
 		w.Done()
-		w.Log("Terminated. UpdateDB says: %v", err.Error())
+		w.Log("Terminated. worker.UpdateDB => %v", err.Error())
 		return errors.New("worker.UpdateDB => " + err.Error())
 	}
 
@@ -154,7 +162,7 @@ func (w *Worker) RunPageviewUpdate() error {
 	return nil
 }
 
-func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
+func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 	//// send the results to the local database ////
 	// make the connection
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
@@ -162,6 +170,13 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
 	if err != nil {
 		return 0, errors.New("sql.Open => " + err.Error())
 	}
+
+	// turn off autocommit to keep our updates atomic
+	// This is unnecessary.
+/*	_, err = con.Exec("SET autocommit=0;")
+	if err != nil {
+		return 0, errors.New("con.Exec => " + err.Error())
+ }*/ 
 	
 	// start a transaction
 	tx, err := con.Begin()
@@ -172,7 +187,7 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
 	// Keep track of total pageview records updated
 	var insertCount int64
 	
-	// convert each canvas.Pageview to an insert statement
+	// convert each lmnCanvas.Pageview to an insert statement
 	for _, pv := range *pvs {
 		ins := "INSERT INTO "+dbInfo.Table+" ("
 		val := " VALUES ("
@@ -224,8 +239,14 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
 		res, err := tx.Exec(qu)
 		if err != nil {
 			err1 := err
+			errorString := "tx.Exec => "+err1.Error()
+
 			err := tx.Rollback()
-			return 0, errors.New("tx.Exec => "+err1.Error()+"\n"+err.Error())
+			if err != nil {
+				errorString += "\n"+err.Error()
+			}
+			
+			return 0, errors.New(errorString)
 		}
 
 		// Record number of rows inserted
@@ -246,14 +267,14 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]canvas.Pageview) (int64, error) {
 }
 
 func GetDateTimeValue(k, strVal string, i int) (string, string, error) {
-	t, err := canvas.TimeFromISO8601(strVal)
+	t, err := lmnTime.TimeFromISO8601(strVal)
 	if err != nil {
-		return "", "", errors.New("canvas.TimeFromISO8601 => " + err.Error())
+		return "", "", errors.New("lmnCanvas.TimeFromISO8601 => " + err.Error())
 	}
 	
-	tu, err := canvas.UnixFromTime(t)
+	tu, err := lmnTime.UnixFromTime(t)
 	if err != nil {
-		return "", "", errors.New("canvas.UnixFromTime => " + err.Error())
+		return "", "", errors.New("lmnCanvas.UnixFromTime => " + err.Error())
 	}
 	
 	insI, valI := BuildInsertAndValues(k, tu, i)
@@ -284,8 +305,8 @@ func BuildInsertAndValues(k, strVal string, i int) (string, string) {
 
 // Call the API and parse the results
 // Return  the "next" link
-// Return a []canvas.Pageview
-func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, error) {
+// Return a []lmnCanvas.Pageview
+func ParsePage(url string, apiInfo APIConnectInfo) (string, []lmnCanvas.Pageview, error) {
 	// Call the API and get the response
 	resp, body, err := GetResponse(url, apiInfo)
 	if err != nil {
@@ -293,15 +314,15 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 	}
 
 	// Get the Link header, check for rel="next"
-	nextLink, err := canvas.GetNextLink(resp)
+	nextLink, err := lmnCanvas.GetNextLink(resp)
 	if err != nil {
-		return "", nil, errors.New("canvas.GetNextLink => " + err.Error())
+		return "", nil, errors.New("lmnCanvas.GetNextLink => " + err.Error())
 	}
 
 	// Get a map representation of the data returned
-	obj, err := canvas.GetObjFromJSON(body)
+	obj, err := lmnCanvas.GetObjFromJSON(body)
 	if err != nil {
-		return "", nil, errors.New("canvas.GetObjFromJSON => " + err.Error())
+		return "", nil, errors.New("lmnCanvas.GetObjFromJSON => " + err.Error())
 	}
 
 	var results []interface{}
@@ -313,13 +334,13 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 		return "", nil, errors.New(fmt.Sprintf("Expecting an array, received %v", vt))
 	}
 
-	var pvs []canvas.Pageview
+	var pvs []lmnCanvas.Pageview
 
 	for _, v := range results {
 		switch v.(type) {
 		case map[string]interface{}:
 			pageviewResult := v.(map[string]interface{})
-			var pv canvas.Pageview = make(canvas.Pageview)
+			var pv lmnCanvas.Pageview = make(lmnCanvas.Pageview)
 			for k, v := range pageviewResult {
 				pv[k] = v
 			}
@@ -331,14 +352,14 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []canvas.Pageview, e
 }
 
 func GetResponse(url string, apiInfo APIConnectInfo) (*http.Response, *[]byte, error) {
-	resp, _, err := canvas.AuthorizedCall(url, apiInfo.Auth, apiInfo.Client)
+	resp, err := lmnCanvas.AuthorizedCall(url, apiInfo.Auth, apiInfo.Client)
 	if err != nil {
-		return nil, nil, errors.New("canvas.AuthorizedCall => " + err.Error())
+		return nil, nil, errors.New("lmnCanvas.AuthorizedCall => " + err.Error())
 	}
 
-	body, _, err := canvas.ReadResponse(resp)
+	body, err := lmnCanvas.ReadResponse(resp)
 	if err != nil {
-		return nil, nil, errors.New("canvas.ReadResponse => " + err.Error())
+		return nil, nil, errors.New("lmnCanvas.ReadResponse => " + err.Error())
 	}
 
 	return resp, body, nil
