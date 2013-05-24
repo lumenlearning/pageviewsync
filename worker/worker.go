@@ -25,7 +25,8 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	lmnCanvas "lumenlearning.com/util/canvas"
+	lmnHttp "lumenlearning.com/util/http"
+	lmnCanvas "lumenlearning.com/util/canvas/api"
 	lmnTime "lumenlearning.com/util/time"
 	"net/http"
 	"sync"
@@ -111,17 +112,17 @@ func (w *Worker) RunPageviewUpdate() error {
 				ts, _ := r["created_at"]
 				id, _ := r["request_id"]
 
-				tISO, err := lmnTime.TimeFromISO8601(ts.(string))
+				tISO, err := lmnTime.TimeFromISO8601Full(ts.(string))
 				if err != nil {
 					w.Done()
 					w.Log("Terminated. lmnTime.TimeFromISO8601 => %v", err)
 					return errors.New("lmnTime.TimeFromISO8601 => " + err.Error())
 				}
-				tUnix, err := lmnTime.UnixFromTime(tISO)
+				tUnix, err := lmnTime.ISO8601BasicFromTime(tISO)
 				if err != nil {
 					w.Done()
-					w.Log("Terminated. lmnTime.UnixFromTime => %v", err)
-					return errors.New("lmnTime.UnixFromTime => " + err.Error())
+					w.Log("Terminated. lmnTime.ISO8601BasicFromTime => %v", err)
+					return errors.New("lmnTime.ISO8601BasicFromTime => " + err.Error())
 				}
 				
 				if id.(string) == lastRequestID || tUnix < lastTimestamp {
@@ -135,12 +136,6 @@ func (w *Worker) RunPageviewUpdate() error {
 			// Add everything from this page
 			pvs = append(pvs, results...)
 		}
-		for _, r := range results {
-			ts, _ := r["created_at"]
-			id, _ := r["request_id"]
-			w.Log("%v\t%v", id, ts)
-		}
-
 
 		// Is there anything left to grab?
 		if nextLink == "" {
@@ -267,12 +262,12 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 }
 
 func GetDateTimeValue(k, strVal string, i int) (string, string, error) {
-	t, err := lmnTime.TimeFromISO8601(strVal)
+	t, err := lmnTime.TimeFromISO8601Full(strVal)
 	if err != nil {
 		return "", "", errors.New("lmnCanvas.TimeFromISO8601 => " + err.Error())
 	}
 	
-	tu, err := lmnTime.UnixFromTime(t)
+	tu, err := lmnTime.ISO8601BasicFromTime(t)
 	if err != nil {
 		return "", "", errors.New("lmnCanvas.UnixFromTime => " + err.Error())
 	}
@@ -357,7 +352,7 @@ func GetResponse(url string, apiInfo APIConnectInfo) (*http.Response, *[]byte, e
 		return nil, nil, errors.New("lmnCanvas.AuthorizedCall => " + err.Error())
 	}
 
-	body, err := lmnCanvas.ReadResponse(resp)
+	body, err := lmnHttp.ReadResponseBody(resp)
 	if err != nil {
 		return nil, nil, errors.New("lmnCanvas.ReadResponse => " + err.Error())
 	}
