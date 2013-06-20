@@ -25,9 +25,9 @@ import (
 	"errors"
 	"fmt"
 	_ "github.com/go-sql-driver/mysql"
-	lmnHttp "lumenlearning.com/pageviewsync/go-utils/http"
-	lmnCanvas "lumenlearning.com/pageviewsync/go-utils/canvas/api"
-	lmnTime "lumenlearning.com/pageviewsync/go-utils/time"
+	lmnHttp "github.com/lumenlearning/pageviewsync/go-utils/http"
+	lmnCanvas "github.com/lumenlearning/pageviewsync/go-utils/canvas/api"
+	lmnTime "github.com/lumenlearning/pageviewsync/go-utils/time"
 	"net/http"
 	"sync"
 )

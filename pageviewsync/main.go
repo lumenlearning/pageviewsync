@@ -23,8 +23,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	lmnIo "lumenlearning.com/pageviewsync/go-utils/io"
-	"lumenlearning.com/pageviewsync/worker"
+	lmnIo "github.com/lumenlearning/pageviewsync/go-utils/io"
+	"github.com/lumenlearning/pageviewsync/worker"
 	"net/http"
 	"os"
 	"runtime"
