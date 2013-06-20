@@ -84,7 +84,7 @@ func (w *Worker) RunPageviewUpdate() error {
 		w.Log("Terminating. worker.GetUpdateReqs => %v", err.Error())
 		return errors.New("worker.GetUpdateReqs => " + err.Error())
 	}
-	var fullUpdate bool = (lastTimestamp == "" || lastRequestID == "")
+	var fullUpdate bool = (lastTimestamp == 0 || lastRequestID == "")
 
 	w.Log("lastRequestID=%v, lastRequestID=%v, fullUpdate=%v", lastRequestID, lastTimestamp, fullUpdate)
 	
@@ -118,14 +118,11 @@ func (w *Worker) RunPageviewUpdate() error {
 					w.Log("Terminated. lmnTime.TimeFromISO8601 => %v", err)
 					return errors.New("lmnTime.TimeFromISO8601 => " + err.Error())
 				}
-				tUnix, err := lmnTime.ISO8601BasicFromTime(tISO)
-				if err != nil {
-					w.Done()
-					w.Log("Terminated. lmnTime.ISO8601BasicFromTime => %v", err)
-					return errors.New("lmnTime.ISO8601BasicFromTime => " + err.Error())
-				}
+				tUnix := tISO.Unix()
 				
-				if id.(string) == lastRequestID || tUnix < lastTimestamp {
+				// We know we need to stop if we've hit the lastRequestID
+				//   or the lastTimestamp (in the case lastRequestID is blank).
+				if id.(string) == lastRequestID || (id.(string) == "" && tUnix <= lastTimestamp) {
 					keepGoing = false
 					break
 				} else {
@@ -144,7 +141,7 @@ func (w *Worker) RunPageviewUpdate() error {
 		}
 	}
 	
-	insertCount, err := UpdateDB(&w.DBInfo, &pvs)
+	insertCount, err := w.UpdateDB(&w.DBInfo, &pvs)
 	if err != nil {
 		w.Done()
 		w.Log("Terminated. worker.UpdateDB => %v", err.Error())
@@ -157,7 +154,7 @@ func (w *Worker) RunPageviewUpdate() error {
 	return nil
 }
 
-func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
+func (w *Worker) UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 	//// send the results to the local database ////
 	// make the connection
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
@@ -166,13 +163,6 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 		return 0, errors.New("sql.Open => " + err.Error())
 	}
 
-	// turn off autocommit to keep our updates atomic
-	// This is unnecessary.
-/*	_, err = con.Exec("SET autocommit=0;")
-	if err != nil {
-		return 0, errors.New("con.Exec => " + err.Error())
- }*/ 
-	
 	// start a transaction
 	tx, err := con.Begin()
 	if err != nil {
@@ -200,24 +190,38 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 			val = val + valI
 			i += 1
 
+			// Here we're going to create a few workaround fields.
 			// If it's the "created_at" field, we also need to make a copy
-			//   in YYYY-mm-dd HH:MM:SS format.  It's NOT "Unix" time format,
-			//   but that's what I called it for lack of a better term.
-			// Also for the "updated_at" field.
+			//   in Unix timestamp format. (Seconds since
+			//   1970-01-01 00:00:00 UTC). ("created_at_unix")
+			// Same thing for the "updated_at" field. ("updated_at_unix")
+			// The "user_id_requested" field is something I have to create
+			//   to keep track of which user ID this pageview actually belongs
+			//   to.  The user_id field sometimes shows 123456, somestimes
+			//   10000000123456, and this makes it hard to consistently work
+			//   with one specific user in the database.  The
+			//   user_id_requested field SHOULD (untested assumption) the
+			//   123456 format, avoiding the synonym issue altogether.
 			if k == "created_at" {
-				insI, valI, err := GetDateTimeValue("created_at_datetime", strVal, i)
+				insI, valI, err := GetUnixTimestampValue("created_at_unix", strVal, i)
 				if err != nil {
-					return 0, errors.New("worker.GetDateTimeValue => " + err.Error())
+					return 0, errors.New("worker.GetUnixTimestampValue => " + err.Error())
 				}
 				ins = ins + insI
 				val = val + valI
 				i += 1
 			}
 			if k == "updated_at" {
-				insI, valI, err := GetDateTimeValue("updated_at_datetime", strVal, i)
+				insI, valI, err := GetUnixTimestampValue("updated_at_unix", strVal, i)
 				if err != nil {
-					return 0, errors.New("worker.GetDateTimeValue => " + err.Error())
+					return 0, errors.New("worker.GetUnixTimestampValue => " + err.Error())
 				}
+				ins = ins + insI
+				val = val + valI
+				i += 1
+			}
+			if k == "user_id" {
+				insI, valI := BuildInsertAndValues("user_id_requested", w.UserID, i)
 				ins = ins + insI
 				val = val + valI
 				i += 1
@@ -259,6 +263,18 @@ func UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
 	}
 
 	return insertCount, nil
+}
+
+func GetUnixTimestampValue(k, strVal string, i int) (string, string, error) {
+	t, err := lmnTime.TimeFromISO8601Full(strVal)
+	if err != nil {
+		return "", "", errors.New("lmnCanvas.TimeFromISO8601 => " + err.Error())
+	}
+	
+	tu := t.Unix()
+
+	insI, valI := BuildInsertAndValues(k, fmt.Sprintf("%v", tu), i)
+	return insI, valI, nil
 }
 
 func GetDateTimeValue(k, strVal string, i int) (string, string, error) {
@@ -360,29 +376,29 @@ func GetResponse(url string, apiInfo APIConnectInfo) (*http.Response, *[]byte, e
 	return resp, body, nil
 }
 
-func GetUpdateReqs(userID string, dbInfo DBConnectInfo) (string, string, error) {
+func GetUpdateReqs(userID string, dbInfo DBConnectInfo) (string, int64, error) {
 	// Connect to the DB and the appropriate schema
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
 	defer con.Close()
 	if err != nil {
-		return "", "", errors.New("sql.Open => " + err.Error())
+		return "", 0, errors.New("sql.Open => " + err.Error())
 	}
 
 	// Build the query
-	query := "SELECT request_id, created_at FROM pageviews WHERE user_id = '"+userID+"' ORDER BY created_at DESC LIMIT 1"
+	query := fmt.Sprintf("SELECT request_id, created_at_unix FROM pageviews WHERE user_id_requested = '%v' ORDER BY created_at_unix DESC, pageviews_key ASC LIMIT 1", userID)
 
 	// Find out the last pageview timestamp for this userID
 	row := con.QueryRow(query)
 	var request_id string
-	var created_at string
+	var created_at int64
 	err = row.Scan(&request_id, &created_at)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
 			request_id = ""
-			created_at = ""
+			created_at = 0
 		} else {
-			return "", "", errors.New("row.Scan => " + err.Error())
+			return "", 0, errors.New("row.Scan => " + err.Error())
 		}
 	}
 
