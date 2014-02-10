@@ -110,7 +110,7 @@ func (w *Worker) RunPageviewUpdate() error {
 			// Find out if we need to keep going
 			for _, r := range results {
 				ts, _ := r["created_at"]
-				id, _ := r["request_id"]
+				id, _ := r["id"]
 
 				tISO, err := lmnTime.TimeFromISO8601Full(ts.(string))
 				if err != nil {
@@ -155,6 +155,10 @@ func (w *Worker) RunPageviewUpdate() error {
 }
 
 func (w *Worker) UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int64, error) {
+	// TODO: We can't assume that everyone is running a local database.
+	// TODO: We can't assume that everyone is running linux and that
+	// they can connect to the DB through a unix pipe.
+
 	//// send the results to the local database ////
 	// make the connection
 	con, err := sql.Open("mysql", dbInfo.User+":"+dbInfo.Pass+"@unix(/var/run/mysqld/mysqld.sock)"+"/"+dbInfo.Schema)
@@ -220,13 +224,12 @@ func (w *Worker) UpdateDB(dbInfo *DBConnectInfo, pvs *[]lmnCanvas.Pageview) (int
 				val = val + valI
 				i += 1
 			}
-			if k == "user_id" {
+			if k == "user" {
 				insI, valI := BuildInsertAndValues("user_id_requested", w.UserID, i)
 				ins = ins + insI
 				val = val + valI
 				i += 1
 			}
-
 		}
 		
 		// Finish up the query bits
@@ -353,6 +356,15 @@ func ParsePage(url string, apiInfo APIConnectInfo) (string, []lmnCanvas.Pageview
 			pageviewResult := v.(map[string]interface{})
 			var pv lmnCanvas.Pageview = make(lmnCanvas.Pageview)
 			for k, v := range pageviewResult {
+				// Break out the sub fields of the links field.  This
+				// is where we have the user ID, course ID, account
+				// ID, etc.
+				if k == "links" {
+					linksMap := v.(map[string]interface{})
+					for k, v := range(linksMap) {
+						pv[k] = v
+					}
+				}
 				pv[k] = v
 			}
 			pvs = append(pvs, pv)
@@ -385,7 +397,9 @@ func GetUpdateReqs(userID string, dbInfo DBConnectInfo) (string, int64, error) {
 	}
 
 	// Build the query
-	query := fmt.Sprintf("SELECT request_id, created_at_unix FROM pageviews WHERE user_id_requested = '%v' ORDER BY created_at_unix DESC, pageviews_key ASC LIMIT 1", userID)
+	// TODO: do we really want pageviews_key sorted ASC? shouldn't it
+	//   be DESC?
+	query := fmt.Sprintf("SELECT id, created_at_unix FROM pageviews WHERE user_id_requested = '%v' ORDER BY created_at_unix DESC, pageviews_key ASC LIMIT 1", userID)
 
 	// Find out the last pageview timestamp for this userID
 	row := con.QueryRow(query)
